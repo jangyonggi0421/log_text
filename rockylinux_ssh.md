@@ -21,7 +21,7 @@ sudo systemctl enable --now sshd
 
 
 # 4. 방화벽 설정:
-sud firewall-cmd --list-all
+sudo firewall-cmd --list-all
 
 ## 4-1. services 에서 ssh 가 없을 경우:
 sudo firewall-cmd --permanent --add-services=ssh
