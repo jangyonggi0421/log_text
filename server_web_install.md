@@ -168,7 +168,7 @@ httpd -M | grep proxy
 
 ```bash
 <VirtualHost *:80>
-    ServerName localhost
+    ServerName localhost:80
 
     ProxyRequests Off
     ProxyPreserveHost On
@@ -186,9 +186,18 @@ httpd -M | grep proxy
 
 3. `httpd.conf` 파일 수정
 ```bash
+# 문법 검사
+sudo httpd -t
+
 # 제일 하단에 추가(필요시)
 ServerName localhost:80
 
 ```
 
 4. 아파치 재시작= `sudo systemctl restart httpd`
+
+5. SELinux가 활성 상태라면 Apache가 Tomcat의 로컬 포트에 연결하도록 허용
+
+```bash
+sudo setsebool -P httpd_can_network_connect 1
+```
