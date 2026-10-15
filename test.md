@@ -309,7 +309,7 @@ sudo journalctl \
 curl -I \
   http://127.0.0.1:9910/tsinspec/auth/login.do
 ```
-직접 접속이 정상이면 Apache의 ProxyPass를 18080으로 변경합니다.
+직접 접속이 정상이면 Apache의 ProxyPass를 9910으로 변경합니다.
 ProxyPass        "/tsinspec/" "http://127.0.0.1:18080/tsinspec/"
 ProxyPassReverse "/tsinspec/" "http://127.0.0.1:18080/tsinspec/"
 설정 검사:
