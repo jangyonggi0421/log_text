@@ -309,54 +309,71 @@ sudo journalctl \
 curl -I \
   http://127.0.0.1:9910/tsinspec/auth/login.do
 ```
-직접 접속이 정상이면 Apache의 ProxyPass를 9910으로 변경합니다.
-ProxyPass        "/tsinspec/" "http://127.0.0.1:18080/tsinspec/"
-ProxyPassReverse "/tsinspec/" "http://127.0.0.1:18080/tsinspec/"
-설정 검사:
-sudo httpd -t
-정상이면:
-sudo systemctl start httpd
-최종 접속:
-curl -I \
-  http://127.0.0.1/tsinspec/auth/login.do
-11. 롤백 방법
+
+## 11. Apache 설정
+
+설정파일: `/etc/httpd/conf.d/tsinspec.conf`
+
+```conf
+<VirtualHost *:8099>
+    ServerName localhost
+    ServerAlias localhost
+
+    ProxyRequests Off
+    ProxyPreserveHost On
+
+    RewriteEngine On
+    RewriteRule ^/?$ /tsinspec/ [R=302,L]
+
+    ProxyPass        /tsinspec/ http://127.0.0.1:9910/tsinspec/ connectiontimeout=5 timeout=120
+    ProxyPassReverse    /tsinspec/      http://127.0.0.1:9910/tsinspec/
+
+    <LocationMatch "^/tsinspec(?:/|$)">
+        <RequireAny>
+            Require local
+            Require ip 192.168.196.105/32
+            Require ip 192.168.196.106/32
+            Require ip 192.168.196.150/32
+        </RequireAny>
+    </LocationMatch>
+</VirtualHost>
+
+```
+
+설정 검사: `sudo httpd -t`
+
+정상이면: `sudo systemctl start httpd`
+
+최종 접속: `curl -i http://127.0.0.1/tsinspec/auth/login.do`
+
+## 12. 롤백 방법
 신규 Tomcat에서 문제가 발생하면:
+```bash
 sudo systemctl stop httpd
 sudo systemctl stop tsinspec-tomcat
+```
+
 Apache ProxyPass를 기존 Tomcat 포트로 되돌립니다.
+
+```bash
 sudo httpd -t
 sudo systemctl start <기존_TOMCAT_서비스명>
 sudo systemctl start httpd
+```
+
 DB를 변경하지 않았기 때문에 Tomcat과 Apache 설정만 되돌리면 됩니다.
-테스트 완료 후에도 유지할 항목
-정상 확인 후에도 바로 삭제하지 않습니다.
-- 기존 Tomcat 설치 디렉터리
-- 기존 Tomcat 서비스 파일
-- 기존 Apache 설정 백업
-- 기존 WAR
-- 기존 업로드 파일
+
+- 테스트 완료 후에도 유지할 항목
+  - 정상 확인 후에도 바로 삭제하지 않습니다.
+    - 기존 Tomcat 설치 디렉터리
+    - 기존 Tomcat 서비스 파일
+    - 기존 Apache 설정 백업
+    - 기존 WAR
+    - 기존 업로드 파일
+
 109번에서 며칠간 정상 운영을 확인한 뒤 신규 VM에도 동일한 /data/tsinspec 구조를 적용하면 됩니다. PostgreSQL과 DNF 설치 패키지는 이번 테스트 범위에서 그대로 유지하면 됩니다.
 
-
-오전 12:32
-
-
-
-
-
-
-
-DB 경로도 /data 하위로 모두 변경해줄래?
-
-
-
-
-
-
-
-오전 12:41
-
-## DB 경로 확인
+## 13. DB 경로 확인 및 백업, 복구
 ```text
 # /data/postgresql/18/data       PostgreSQL 운영 데이터·설정
 # /data/postgresql/18/backup     논리 백업
@@ -377,12 +394,15 @@ sudo -u postgres /usr/pgsql-18/bin/psql \
   -d postgres \
   -c "SHOW data_directory;"
 ```
+
 이미 다음 결과라면 데이터 이동은 필요 없습니다.
 `/data/postgresql/18/data`
 
 다음과 같이 나오면 이전 작업을 진행합니다.
 `/var/lib/pgsql/18/data`
+
 현재 포트와 데이터 체크섬도 확인합니다.
+```bash
 sudo -u postgres /usr/pgsql-18/bin/psql \
   -p 32419 \
   -d postgres \
@@ -392,8 +412,11 @@ sudo -u postgres /usr/pgsql-18/bin/psql \
   -p 32419 \
   -d postgres \
   -c "SHOW data_checksums;"
+```
+
 2. 외부 테이블스페이스와 WAL 경로 확인
 기본 경로 밖의 테이블스페이스가 있는지 확인합니다.
+```bash
 sudo -u postgres /usr/pgsql-18/bin/psql \
   -p 32419 \
   -d postgres \
@@ -404,28 +427,46 @@ SELECT
 FROM pg_tablespace
 ORDER BY spcname;
 "
+```
+
 pg_default, pg_global만 있고 location이 비어 있으면 일반적인 구성입니다.
 WAL이 외부 경로로 연결됐는지도 확인합니다.
+
+```bash
 sudo ls -ld \
   /var/lib/pgsql/18/data/pg_wal
 
 sudo readlink -f \
   /var/lib/pgsql/18/data/pg_wal
+```
+
 다음처럼 데이터 디렉터리 내부 경로이면 그대로 복사됩니다.
-/var/lib/pgsql/18/data/pg_wal
+`/var/lib/pgsql/18/data/pg_wal`
+
 별도 경로가 나온다면 해당 WAL 경로도 별도로 /data로 이전해야 하므로 바로 복사하지 말고 경로를 먼저 정리해야 합니다.
+
 3. 이전 전 논리 백업
 Tomcat을 중지하여 DB 쓰기를 차단합니다.
+```bash
 sudo systemctl stop tsinspec-tomcat
+```
+
 기존 서비스 이름을 아직 사용한다면 해당 서비스를 중지합니다.
+```bash
 sudo systemctl stop tomcat
+```
+
 DB는 실행 중인 상태에서 백업 디렉터리를 만듭니다.
+```bash
 sudo install -d \
   -o postgres \
   -g postgres \
   -m 700 \
   /data/postgresql/18/backup
+```
+
 애플리케이션 DB 백업:
+```bash
 sudo -u postgres /usr/pgsql-18/bin/pg_dump \
   -p 32419 \
   -d ts_insp_db \
@@ -433,23 +474,35 @@ sudo -u postgres /usr/pgsql-18/bin/pg_dump \
   --compress=6 \
   --verbose \
   --file=/data/postgresql/18/backup/ts_insp_db_before_pgdata_move_20261015.dump
+```
+
 PostgreSQL 역할 백업:
+```bash
 sudo -u postgres /usr/pgsql-18/bin/pg_dumpall \
   -p 32419 \
   --globals-only \
   --file=/data/postgresql/18/backup/globals_before_pgdata_move_20261015.sql
+```
+
 역할 백업에는 PostgreSQL 비밀번호 검증값이 들어갈 수 있으므로 권한을 제한합니다.
+```bash
 sudo chmod 600 \
   /data/postgresql/18/backup/ts_insp_db_before_pgdata_move_20261015.dump \
   /data/postgresql/18/backup/globals_before_pgdata_move_20261015.sql
+```
+
 체크섬:
+```bash
 cd /data/postgresql/18/backup
 
 sudo -u postgres sha256sum \
   ts_insp_db_before_pgdata_move_20261015.dump \
   globals_before_pgdata_move_20261015.sql \
   | sudo tee pgdata_move_20261015.sha256 >/dev/null
+```
+
 4. 이전 전 데이터 건수 기록
+```bash
 sudo -u postgres /usr/pgsql-18/bin/psql \
   -p 32419 \
   -d ts_insp_db
@@ -466,124 +519,221 @@ SELECT count(*) AS login_attempt_count
 FROM inspection.tbl_login_attempt;
 
 \q
+```
 결과를 별도로 기록합니다.
+
 5. 신규 데이터 경로 생성
 먼저 기존 상태를 확인합니다.
+```bash
 sudo ls -la \
   /data/postgresql/18/data
+```
+
 디렉터리가 없으면 생성합니다.
+```bash
 sudo install -d \
   -o postgres \
   -g postgres \
   -m 700 \
   /data/postgresql/18/data
+```
+
 이미 다른 PostgreSQL 클러스터가 초기화되어 있다면 기존 데이터와 섞으면 안 됩니다. 별도로 보관합니다.
+```bash
 sudo mv \
   /data/postgresql/18/data \
   /data/postgresql/18/data-before-migration-20261015
+```
+
 그다음 빈 디렉터리를 다시 만듭니다.
+```bash
 sudo install -d \
   -o postgres \
   -g postgres \
   -m 700 \
   /data/postgresql/18/data
+```
+
 6. SELinux 경로 등록
+```bash
 sudo semanage fcontext -a \
   -t postgresql_db_t \
   '/data/postgresql/18(/.*)?'
+```
+
 이미 등록된 규칙이라는 오류가 나오면:
+```bash
 sudo semanage fcontext -m \
   -t postgresql_db_t \
   '/data/postgresql/18(/.*)?'
+```
+
 적용:
+```bash
 sudo restorecon -RFv \
   /data/postgresql/18
+```
+
 확인:
+```bash
 ls -Zd \
   /data/postgresql/18 \
   /data/postgresql/18/data
+```
 semanage가 없다면 먼저 설치합니다.
+```bash
 sudo dnf install policycoreutils-python-utils
+```
+
 7. PostgreSQL 완전 중지
+```bash
 sudo systemctl stop postgresql-18
+```
+
 상태 확인:
+```bash
 sudo systemctl status \
   postgresql-18 \
   --no-pager
+```
+
 프로세스가 남아 있지 않은지 확인합니다.
+```bash
 ps -ef | grep '[p]ostgres'
+```
 결과가 없어야 합니다.
+
 8. 기존 데이터 디렉터리 복사
+
 rsync가 있는지 확인합니다.
+```bash
 command -v rsync
+```
+
 없으면 설치합니다.
+```bash
 sudo dnf install rsync
+```
+
 기존 데이터 디렉터리가 /var/lib/pgsql/18/data인 경우:
+```bash
 sudo rsync \
   -aHAX \
   --numeric-ids \
   /var/lib/pgsql/18/data/ \
   /data/postgresql/18/data/
+```
+
 소유권과 권한을 다시 정리합니다.
+```bash
 sudo chown -R postgres:postgres \
   /data/postgresql/18/data
 
 sudo chmod 700 \
   /data/postgresql/18/data
+```
+
 디스크에 기록을 반영합니다.
+```bash
 sync
+```
+
 두 디렉터리의 크기를 비교합니다.
+```bash
 sudo du -sh \
   /var/lib/pgsql/18/data \
   /data/postgresql/18/data
+```
+
 9. 새 데이터 디렉터리 검사
 PostgreSQL 버전 정보 확인:
+```bash
 sudo -u postgres /usr/pgsql-18/bin/pg_controldata \
   /data/postgresql/18/data \
   | grep -E \
   'Database cluster state|Database block size|Data page checksum version'
+```
+
 정상 종료 상태는 다음과 같습니다.
+```text
 Database cluster state: shut down
-in production 또는 in crash recovery라면 서비스를 시작하지 말고 복사 과정을 다시 확인해야 합니다.
-10. systemd의 PGDATA 변경
+```
+
+`in production` 또는 `in crash recovery`라면 서비스를 시작하지 말고 복사 과정을 다시 확인해야 합니다.
+
+11. systemd의 PGDATA 변경
 직접 서비스 원본 파일을 수정하지 않고 drop-in을 생성합니다.
-sudo systemctl edit postgresql-18
+```bash
+sudo systemctl edit --full postgresql-18
+```
+
 다음 내용을 입력합니다.
+```bash
 [Service]
 Environment=PGDATA=/data/postgresql/18/data
+```
+
 적용:
+```bash
 sudo systemctl daemon-reload
+```
+
 확인:
+```bash
 sudo systemctl show \
   postgresql-18 \
   --property=Environment
+```
+
 다음 값이 포함되어야 합니다.
+```text
 PGDATA=/data/postgresql/18/data
-11. PostgreSQL 시작
+```
+
+12. PostgreSQL 시작
+```bash
 sudo systemctl start postgresql-18
+```
+
 상태 확인:
+```bash
 sudo systemctl status \
   postgresql-18 \
   --no-pager
+```
+
 문제가 발생하면:
+```bash
 sudo journalctl \
   -u postgresql-18 \
   -n 300 \
   --no-pager
-12. 변경 결과 확인
+```
+
+13. 변경 결과 확인
 데이터 경로:
+```bash
 sudo -u postgres /usr/pgsql-18/bin/psql \
   -p 32419 \
   -d postgres \
   -c "SHOW data_directory;"
+```
+
 정상 결과:
+```bash
 /data/postgresql/18/data
+```
+
 포트:
+```bash
 sudo -u postgres /usr/pgsql-18/bin/psql \
   -p 32419 \
   -d postgres \
   -c "SHOW port;"
+```
+
 DB 및 역할:
+```bash
 sudo -u postgres /usr/pgsql-18/bin/psql \
   -p 32419 \
   -d postgres \
@@ -593,18 +743,26 @@ sudo -u postgres /usr/pgsql-18/bin/psql \
   -p 32419 \
   -d postgres \
   -c "\du+"
+```
+
 테이블 확인:
+```bash
 sudo -u postgres /usr/pgsql-18/bin/psql \
   -p 32419 \
   -d ts_insp_db \
   -c "\dt inspection.*"
+```
 앞서 기록한 데이터 건수도 다시 비교합니다.
+
 13. 설정 내 기존 경로 확인
 새 데이터 디렉터리 안에 기존 /var/lib/pgsql 경로가 남아 있는지 확인합니다.
+```bash
 sudo grep -Rni \
   '/var/lib/pgsql' \
   /data/postgresql/18/data \
   --exclude='postmaster.pid'
+```
+
 다음 설정에서 기존 경로가 발견되면 /data 기준으로 수정합니다.
 - archive_command
 - restore_command
@@ -612,10 +770,15 @@ sudo grep -Rni \
 - 외부 SSL 인증서 경로
 - 사용자 정의 include 파일
 - 테이블스페이스 경로
+
 WAL 아카이브를 사용할 경우:
+```text
 archive_mode = on
 archive_command = 'test ! -f /data/postgresql/18/archive/%f && cp %p /data/postgresql/18/archive/%f'
+```
+
 아카이브 디렉터리:
+```bash
 sudo install -d \
   -o postgres \
   -g postgres \
@@ -624,104 +787,123 @@ sudo install -d \
 
 sudo restorecon -RFv \
   /data/postgresql/18/archive
+```
 WAL 아카이브를 사용하지 않는다면 archive_mode=off 상태로 유지합니다.
+
 14. Tomcat 다시 시작
 DB 확인이 끝나면 /data 기반 Tomcat을 시작합니다.
+```bash
 sudo systemctl start tsinspec-tomcat
+```
+
 확인:
+```bash
 sudo journalctl \
   -u tsinspec-tomcat \
   -n 300 \
   --no-pager
+```
+
 직접 접속:
-curl -I \
-  http://127.0.0.1:18080/tsinspec/auth/login.do
-롤백 방법
+```bash
+curl -I http://127.0.0.1:18080/tsinspec/auth/login.do
+```
+
+15. 롤백 방법
 신규 PGDATA에서 문제가 발생하면 원본 데이터 디렉터리를 삭제하지 않았으므로 되돌릴 수 있습니다.
-PostgreSQL 중지:
+
+```bash
+# PostgreSQL 중지:
 sudo systemctl stop postgresql-18
-현재 override 파일을 비활성화합니다.
+
+# 현재 override 파일을 비활성화합니다.
 sudo mv \
   /etc/systemd/system/postgresql-18.service.d/override.conf \
   /etc/systemd/system/postgresql-18.service.d/override.conf.disabled
-적용:
+
+# 적용:
 sudo systemctl daemon-reload
 sudo systemctl start postgresql-18
-확인:
+
+# 확인:
 sudo -u postgres /usr/pgsql-18/bin/psql \
   -p 32419 \
   -d postgres \
   -c "SHOW data_directory;"
+```
+
 기존 경로가 나오면 롤백된 것입니다.
+
 삭제하지 말아야 할 경로
-테스트가 끝나도 바로 삭제하지 않습니다.
+```text
 /var/lib/pgsql/18/data
 /data/postgresql/18/data-before-migration-20261015
 /data/postgresql/18/backup
+```
+
 109번에서 /data 기반 Tomcat·PostgreSQL이 정상 동작하고 로그인, 자산, 점검, 보고서 기능까지 검증한 후에 기존 PostgreSQL 경로 정리를 검토하면 됩니다.
 
-tsinspec-tomcat.service: Failed at step EXEC spawning /data/tsinspec/apps/tomcat/bin/catalina.sh: Permission denied 왜 이러지?
 
 
 
-
-
-
-
-오전 1:37
-
-
-
-
-
-
-14초 동안 작업함
-
-
-
-
-
+## 14. 오류 시
+> tsinspec-tomcat.service: Failed at step EXEC spawning /data/tsinspec/apps/tomcat/bin/catalina.sh: Permission denied 왜 이러지?
 
 이 오류는 Java나 Tomcat 설정을 읽기 전, systemd가 catalina.sh 자체를 실행하지 못한 상태입니다. 주요 원인은 다음 셋 중 하나입니다.
+
 1. catalina.sh 실행 권한 누락
 2. /data가 noexec로 마운트됨
 3. SELinux가 /data의 실행을 차단함
+
 순서대로 확인하면 됩니다.
+
 1. 실행 권한과 상위 경로 확인
+```bash
 readlink -f \
   /data/tsinspec/apps/tomcat
-예상 결과:
+
+# 예상 결과:
 /data/tsinspec/apps/apache-tomcat-10.1.60
-스크립트 권한 확인:
+
+# 스크립트 권한 확인:
 ls -lZ \
   /data/tsinspec/apps/tomcat/bin/catalina.sh
-전체 상위 경로 권한 확인:
+
+# 전체 상위 경로 권한 확인:
 namei -l \
   /data/tsinspec/apps/tomcat/bin/catalina.sh
-tomcat 계정이 실행할 수 있는지 확인합니다.
+
+# tomcat 계정이 실행할 수 있는지 확인합니다.
 sudo -u tomcat test \
   -x /data/tsinspec/apps/tomcat/bin/catalina.sh
 
 echo $?
-- 0: 권한상 실행 가능
-- 1: 실행 권한 또는 상위 디렉터리 접근 권한 문제
+# - 0: 권한상 실행 가능
+# - 1: 실행 권한 또는 상위 디렉터리 접근 권한 문제
+```
+
 2. Tomcat 권한 재설정
+```bash
 sudo chown -R root:tomcat \
   /data/tsinspec/apps/apache-tomcat-10.1.60
-디렉터리 권한:
+
+# 디렉터리 권한:
 sudo find \
   /data/tsinspec/apps/apache-tomcat-10.1.60 \
   -type d \
   -exec chmod 750 {} \;
-일반 파일 권한:
+
+# 일반 파일 권한:
 sudo find \
   /data/tsinspec/apps/apache-tomcat-10.1.60 \
   -type f \
   -exec chmod 640 {} \;
-스크립트에 실행 권한을 다시 부여합니다.
+
+# 스크립트에 실행 권한을 다시 부여합니다.
 sudo chmod 750 \
   /data/tsinspec/apps/apache-tomcat-10.1.60/bin/*.sh
-상위 디렉터리도 접근 가능하게 설정합니다.
+
+# 상위 디렉터리도 접근 가능하게 설정합니다.
 sudo chown root:tomcat \
   /data/tsinspec \
   /data/tsinspec/apps
@@ -729,71 +911,61 @@ sudo chown root:tomcat \
 sudo chmod 750 \
   /data/tsinspec \
   /data/tsinspec/apps
-/data 자체 권한도 확인합니다.
+
+# /data 자체 권한도 확인합니다.
 ls -ld /data
-tomcat 계정에 /data 통과 권한이 없으면 ACL로 최소 권한만 부여할 수 있습니다.
+
+# tomcat 계정에 /data 통과 권한이 없으면 ACL로 최소 권한만 부여할 수 있습니다.
 sudo setfacl \
   -m u:tomcat:--x \
   /data
-다시 확인합니다.
+
+# 다시 확인합니다.
 sudo -u tomcat test \
   -x /data/tsinspec/apps/tomcat/bin/catalina.sh
 
 echo $?
-3. /data의 noexec 확인
-이번 오류에서는 반드시 확인해야 합니다.
-findmnt \
-  -no TARGET,SOURCE,FSTYPE,OPTIONS \
-  /data
-결과에 다음 옵션이 있다면 원인입니다.
-noexec
-예:
-/data /dev/mapper/data xfs rw,nodev,nosuid,noexec
-임시로 실행을 허용하려면:
-sudo mount \
-  -o remount,exec \
-  /data
-확인:
-findmnt -no OPTIONS /data
-재부팅 후에도 유지하려면 /etc/fstab의 /data 항목에서 noexec를 제거하고 exec 또는 기본값을 적용해야 합니다.
-sudo vi /etc/fstab
-예:
-defaults,nodev,nosuid
-보안 정책상 /data에 반드시 noexec가 있어야 한다면 Tomcat 프로그램은 /opt/apache-tomcat-10.1.60에 두고 다음 데이터만 /data에 두어야 합니다.
-/data/tsinspec/tomcat-base
-/data/tsinspec/data
-/data/tsinspec/deploy
-/data/tsinspec/backup
-ExecStart=/bin/bash catalina.sh run처럼 noexec를 우회하는 방식은 운영 구성으로 권장하지 않습니다.
-4. SELinux 확인
+```
+
+3. SELinux 확인
+```bash
 getenforce
-Enforcing이면 최근 차단 기록을 확인합니다.
+
+# Enforcing이면 최근 차단 기록을 확인합니다.
 sudo ausearch \
   -m AVC \
   -ts recent \
   | tail -50
-현재 컨텍스트 확인:
+
+# 현재 컨텍스트 확인:
 ls -ldZ \
   /data/tsinspec/apps \
   /data/tsinspec/apps/apache-tomcat-10.1.60
 
 ls -lZ \
   /data/tsinspec/apps/tomcat/bin/catalina.sh
-Tomcat 프로그램 경로를 실행 가능한 일반 프로그램 타입으로 영구 등록합니다.
+
+# Tomcat 프로그램 경로를 실행 가능한 일반 프로그램 타입으로 영구 등록합니다.
 sudo semanage fcontext -a \
   -t usr_t \
   '/data/tsinspec/apps(/.*)?'
-규칙이 이미 존재한다면:
+
+# 규칙이 이미 존재한다면:
 sudo semanage fcontext -m \
   -t usr_t \
   '/data/tsinspec/apps(/.*)?'
-적용:
+
+# 적용:
 sudo restorecon -RFv \
   /data/tsinspec/apps
-확인:
+
+# 확인:
 ls -lZ \
   /data/tsinspec/apps/tomcat/bin/catalina.sh
+```
+
 컨텍스트에 usr_t가 포함되어야 합니다.
+
 5. 스크립트 형식 확인
 file \
   /data/tsinspec/apps/tomcat/bin/catalina.sh
@@ -1490,30 +1662,7 @@ host    replication     all             ::1/128                 scram-sha-256
 ```
 
 
-```conf
-<VirtualHost *:8099>
-    ServerName 192.168.196.109
-    ServerAlias localhost
 
-    ProxyRequests Off
-    ProxyPreserveHost On
-
-    RewriteEngine On
-    RewriteRule ^/?$ /tsinspec/ [R=302,L]
-
-    ProxyPass        /tsinspec/ http://127.0.0.1:9910/tsinspec/ connectiontimeout=5 timeout=120
-    ProxyPassReverse    /tsinspec/      http://127.0.0.1:9910/tsinspec/
-
-    <LocationMatch "^/tsinspec(?:/|$)">
-        <RequireAny>
-            Require local
-            Require ip 192.168.196.105/32
-            Require ip 192.168.196.106/32
-            Require ip 192.168.196.150/32
-        </RequireAny>
-    </LocationMatch>
-</VirtualHost>
-```
 
 톰캣 포트를 9910으로 수정한 뒤에 배포가 안된다면?
 
