@@ -356,37 +356,32 @@ DB 경로도 /data 하위로 모두 변경해줄래?
 
 오전 12:41
 
+## DB 경로 확인
+```text
+# /data/postgresql/18/data       PostgreSQL 운영 데이터·설정
+# /data/postgresql/18/backup     논리 백업
+# /data/postgresql/18/archive    WAL 아카이브
+# /data/tsinspec                 Tomcat·WAR·업로드 데이터
+```
 
-
-
-
-
-22초 동안 작업함
-
-
-
-
-
-
-가능합니다. 109번 VM의 PostgreSQL 데이터까지 /data 아래로 이전하면 신규 운영 VM과 거의 동일한 구조로 사전 테스트할 수 있습니다.
-다만 기존 DB가 이미 복원되어 있으므로 initdb나 pg_restore를 다시 실행하면 안 됩니다. PostgreSQL을 완전히 중지한 뒤 현재 데이터 디렉터리를 그대로 복사하고 PGDATA만 변경합니다.
-최종 구조는 다음과 같습니다.
-/data/postgresql/18/data       PostgreSQL 운영 데이터·설정
-/data/postgresql/18/backup     논리 백업
-/data/postgresql/18/archive    WAL 아카이브
-/data/tsinspec                 Tomcat·WAR·업로드 데이터
 PostgreSQL 프로그램과 서비스는 DNF 설치 경로를 유지합니다.
+```text
 /usr/pgsql-18
 postgresql-18.service
+```
+
 1. 현재 DB 경로 확인
+```bash
 sudo -u postgres /usr/pgsql-18/bin/psql \
   -p 32419 \
   -d postgres \
   -c "SHOW data_directory;"
+```
 이미 다음 결과라면 데이터 이동은 필요 없습니다.
-/data/postgresql/18/data
+`/data/postgresql/18/data`
+
 다음과 같이 나오면 이전 작업을 진행합니다.
-/var/lib/pgsql/18/data
+`/var/lib/pgsql/18/data`
 현재 포트와 데이터 체크섬도 확인합니다.
 sudo -u postgres /usr/pgsql-18/bin/psql \
   -p 32419 \
